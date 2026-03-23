@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MeetMind</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 300px;
+      background: #0f172a;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+    }
+
+    .header {
+      padding: 16px;
+      border-bottom: 1px solid #1e293b;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo {
+      width: 32px;
+      height: 32px;
+      background: #2563eb;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .logo svg {
+      width: 18px;
+      height: 18px;
+      color: white;
+    }
+
+    .header-text h1 {
+      font-size: 15px;
+      font-weight: 700;
+      color: #f1f5f9;
+    }
+
+    .header-text p {
+      font-size: 11px;
+      color: #64748b;
+    }
+
+    .content {
+      padding: 16px;
+    }
+
+    .status-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .status-dot.gray { background: #475569; }
+    .status-dot.green { background: #22c55e; animation: pulse 1.5s infinite; }
+    .status-dot.yellow { background: #eab308; animation: pulse 1.5s infinite; }
+    .status-dot.red { background: #ef4444; }
+    .status-dot.blue { background: #3b82f6; animation: pulse 1.5s infinite; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .status-label {
+      font-size: 13px;
+      color: #94a3b8;
+    }
+
+    .meeting-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+
+    .timer {
+      font-size: 24px;
+      font-weight: 700;
+      color: #f1f5f9;
+      font-variant-numeric: tabular-nums;
+      margin-top: 8px;
+      font-family: monospace;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 10px 16px;
+      border-radius: 8px;
+      border: none;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-primary {
+      background: #2563eb;
+      color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: #1d4ed8;
+    }
+
+    .btn-danger {
+      background: #dc2626;
+      color: white;
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background: #b91c1c;
+    }
+
+    .message-box {
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      margin-top: 10px;
+      line-height: 1.5;
+    }
+
+    .message-box.info {
+      background: #1e3a5f;
+      border: 1px solid #2563eb;
+      color: #93c5fd;
+    }
+
+    .message-box.success {
+      background: #14532d;
+      border: 1px solid #22c55e;
+      color: #86efac;
+    }
+
+    .message-box.error {
+      background: #450a0a;
+      border: 1px solid #ef4444;
+      color: #fca5a5;
+    }
+
+    .footer {
+      padding: 10px 16px;
+      border-top: 1px solid #1e293b;
+      text-align: center;
+    }
+
+    .footer a {
+      font-size: 11px;
+      color: #64748b;
+      text-decoration: none;
+    }
+
+    .footer a:hover {
+      color: #94a3b8;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+      </svg>
+    </div>
+    <div class="header-text">
+      <h1>MeetMind</h1>
+      <p>AI Meeting Assistant</p>
+    </div>
+  </div>
+
+  <div class="content">
+    <div class="status-card">
+      <div class="status-row">
+        <div class="status-dot" id="statusDot"></div>
+        <span class="status-label" id="statusLabel">Checking...</span>
+      </div>
+      <div class="meeting-title hidden" id="meetingTitle"></div>
+      <div class="timer hidden" id="timer">00:00</div>
+    </div>
+
+    <button class="btn btn-primary hidden" id="startBtn">
+      <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+      </svg>
+      Start Recording
+    </button>
+
+    <button class="btn btn-danger hidden" id="stopBtn">
+      <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+      </svg>
+      Stop Recording
+    </button>
+
+    <div class="message-box hidden" id="messageBox"></div>
+  </div>
+
+  <div class="footer">
+    <a href="http://localhost:3000" target="_blank">Open Dashboard</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
