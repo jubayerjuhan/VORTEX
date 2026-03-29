@@ -51,6 +51,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'uploadComplete') {
     recordingState.isProcessing = false;
     chrome.runtime.sendMessage({ action: 'uploadComplete', meetingId: message.meetingId }).catch(() => {});
+    pollMeetingStatus(message.meetingId);
     return false;
   }
 
@@ -198,6 +199,53 @@ function onTabClose(tabId) {
     console.log('[Background] Meet tab closed — stopping recording');
     stopRecording().catch(console.error);
   }
+}
+
+// ── Meeting status polling + desktop notifications ────────────────────────────
+
+async function pollMeetingStatus(meetingId) {
+  const MAX_ATTEMPTS = 60; // 5 minutes at 5s intervals
+  let attempts = 0;
+
+  const check = async () => {
+    attempts++;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/meetings/${meetingId}`);
+      if (!res.ok) return;
+      const { meeting } = await res.json();
+
+      if (meeting.status === 'completed') {
+        chrome.notifications.create(`meetmind-${meetingId}`, {
+          type: 'basic',
+          iconUrl: 'icons/icon48.png',
+          title: 'Meeting ready!',
+          message: `"${meeting.title}" has been transcribed and summarised.`,
+          priority: 1,
+        });
+        return; // Stop polling
+      }
+
+      if (meeting.status === 'failed') {
+        chrome.notifications.create(`meetmind-fail-${meetingId}`, {
+          type: 'basic',
+          iconUrl: 'icons/icon48.png',
+          title: 'Processing failed',
+          message: `"${meeting.title}" could not be processed. Open the dashboard to retry.`,
+          priority: 1,
+        });
+        return; // Stop polling
+      }
+
+      // Still processing — schedule next check
+      if (attempts < MAX_ATTEMPTS) {
+        setTimeout(check, 5000);
+      }
+    } catch {
+      if (attempts < MAX_ATTEMPTS) setTimeout(check, 5000);
+    }
+  };
+
+  setTimeout(check, 5000); // First check after 5s
 }
 
 function onTabUpdate(tabId, changeInfo) {

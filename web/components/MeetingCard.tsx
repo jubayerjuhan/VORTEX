@@ -11,6 +11,7 @@ interface Meeting {
     actionItems?: string[];
   };
   participants?: string[];
+  tags?: string[];
 }
 
 function formatDuration(seconds: number): string {
@@ -99,6 +100,22 @@ export default function MeetingCard({ meeting }: { meeting: Meeting }) {
           )}
           {meeting.status === 'failed' && (
             <p className="text-red-400/80 text-xs mb-4">Processing failed — click to retry</p>
+          )}
+
+          {/* Tags */}
+          {meeting.tags && meeting.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1 mb-3">
+              {meeting.tags.slice(0, 3).map((tag) => (
+                <span key={tag} className="text-[10px] px-2 py-0.5 bg-blue-600/10 text-blue-400/80 border border-blue-600/15 rounded-full">
+                  {tag}
+                </span>
+              ))}
+              {meeting.tags.length > 3 && (
+                <span className="text-[10px] px-2 py-0.5 bg-gray-800 text-gray-500 rounded-full">
+                  +{meeting.tags.length - 3}
+                </span>
+              )}
+            </div>
           )}
 
           {/* Footer */}

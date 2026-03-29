@@ -20,6 +20,9 @@ export interface IMeeting extends Document {
   processingStep: 'uploading' | 'transcribing' | 'summarizing' | null;
   createdAt: Date;
   error?: string;
+  tags: string[];
+  notes: string;
+  speakerNames: Map<string, string>;
 }
 
 const MeetingSchema = new Schema<IMeeting>(
@@ -48,11 +51,16 @@ const MeetingSchema = new Schema<IMeeting>(
       default: null,
     },
     error: { type: String },
+    tags: [{ type: String }],
+    notes: { type: String, default: '' },
+    speakerNames: { type: Map, of: String, default: {} },
   },
   {
     timestamps: true,
   }
 );
+
+MeetingSchema.index({ title: 'text', transcript: 'text', 'summary.tldr': 'text' });
 
 const Meeting = mongoose.models.Meeting || mongoose.model<IMeeting>('Meeting', MeetingSchema);
 

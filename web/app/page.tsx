@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import MeetingCard from '@/components/MeetingCard';
 import LoadingSkeleton from '@/components/LoadingSkeleton';
 
@@ -12,6 +13,7 @@ interface Meeting {
   status: 'recording' | 'processing' | 'completed' | 'failed';
   summary?: { tldr?: string; actionItems?: string[] };
   participants?: string[];
+  tags?: string[];
 }
 
 type FilterType = 'all' | 'completed' | 'processing' | 'recording' | 'failed';
@@ -31,9 +33,18 @@ function StatCard({ label, value, icon, sub }: { label: string; value: string | 
   );
 }
 
-export default function HomePage() {
+const PAGE_SIZE = 12;
+
+function HomePageInner() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const tagFilter = searchParams.get('tag') ?? '';
+
   const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rawQuery, setRawQuery] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -41,41 +52,63 @@ export default function HomePage() {
   const searchRef = useRef<HTMLInputElement>(null);
   const meetingsRef = useRef<Meeting[]>([]);
 
-  const fetchMeetings = useCallback(async (q?: string) => {
+  const buildUrl = useCallback((q: string, p: number) => {
+    const params = new URLSearchParams();
+    if (q.trim()) params.set('q', q.trim());
+    if (tagFilter) params.set('tag', tagFilter);
+    params.set('page', String(p));
+    params.set('limit', String(PAGE_SIZE));
+    return `/api/meetings?${params.toString()}`;
+  }, [tagFilter]);
+
+  const fetchMeetings = useCallback(async (q: string, p = 1, append = false) => {
     try {
-      const url = q && q.trim() ? `/api/meetings?q=${encodeURIComponent(q.trim())}` : '/api/meetings';
-      const res = await fetch(url);
+      const res = await fetch(buildUrl(q, p));
       if (!res.ok) throw new Error('Failed to fetch');
       const data = await res.json();
-      setMeetings(data.meetings);
-      meetingsRef.current = data.meetings;
+      if (append) {
+        setMeetings((prev) => {
+          const updated = [...prev, ...data.meetings];
+          meetingsRef.current = updated;
+          return updated;
+        });
+      } else {
+        setMeetings(data.meetings);
+        meetingsRef.current = data.meetings;
+      }
+      setTotal(data.total ?? data.meetings.length);
       setError(null);
     } catch {
       setError('Failed to load meetings. Make sure the server is running.');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  }, []);
+  }, [buildUrl]);
 
-  // Initial load
+  // Initial load / tag filter change
   useEffect(() => {
-    fetchMeetings();
-  }, [fetchMeetings]);
+    setLoading(true);
+    setPage(1);
+    fetchMeetings(searchQuery, 1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tagFilter]);
 
   // Debounce search
   useEffect(() => {
     const t = setTimeout(() => {
       setSearchQuery(rawQuery);
-      fetchMeetings(rawQuery);
+      setPage(1);
+      fetchMeetings(rawQuery, 1);
     }, 300);
     return () => clearTimeout(t);
   }, [rawQuery, fetchMeetings]);
 
-  // Auto-refresh while processing (avoids stale closure)
+  // Auto-refresh while processing
   useEffect(() => {
     const interval = setInterval(() => {
       if (meetingsRef.current.some((m) => m.status === 'processing')) {
-        fetchMeetings(searchQuery);
+        fetchMeetings(searchQuery, 1);
       }
     }, 5000);
     return () => clearInterval(interval);
@@ -92,6 +125,13 @@ export default function HomePage() {
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, []);
+
+  const loadMore = async () => {
+    const nextPage = page + 1;
+    setPage(nextPage);
+    setLoadingMore(true);
+    await fetchMeetings(searchQuery, nextPage, true);
+  };
 
   // Stats
   const totalHours = (() => {
@@ -119,6 +159,7 @@ export default function HomePage() {
   };
 
   const filtered = meetings.filter((m) => filter === 'all' || m.status === filter);
+  const hasMore = meetings.length < total;
 
   const filters: { id: FilterType; label: string }[] = [
     { id: 'all', label: 'All' },
@@ -132,9 +173,24 @@ export default function HomePage() {
       {/* Page header */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-xl font-bold text-white">Your Meetings</h1>
+          <h1 className="text-xl font-bold text-white">
+            {tagFilter ? (
+              <span className="flex items-center gap-2">
+                Tagged: <span className="text-blue-400">{tagFilter}</span>
+                <button
+                  onClick={() => router.push('/')}
+                  className="text-gray-600 hover:text-gray-400 text-sm font-normal ml-1"
+                  title="Clear tag filter"
+                >
+                  ✕
+                </button>
+              </span>
+            ) : (
+              'Your Meetings'
+            )}
+          </h1>
           <p className="text-gray-500 text-sm mt-0.5">
-            {loading ? 'Loading...' : `${counts.all} meeting${counts.all !== 1 ? 's' : ''} recorded`}
+            {loading ? 'Loading...' : `${total} meeting${total !== 1 ? 's' : ''} recorded`}
           </p>
         </div>
 
@@ -149,8 +205,8 @@ export default function HomePage() {
               type="text"
               value={rawQuery}
               onChange={(e) => setRawQuery(e.target.value)}
-              placeholder="Search meetings..."
-              className="w-64 bg-gray-900 border border-gray-800 rounded-xl pl-9 pr-10 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600/60 focus:ring-1 focus:ring-blue-600/30 transition-all"
+              placeholder="Search meetings & transcripts..."
+              className="w-72 bg-gray-900 border border-gray-800 rounded-xl pl-9 pr-10 py-2 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600/60 focus:ring-1 focus:ring-blue-600/30 transition-all"
             />
             <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded font-mono border border-gray-700">
               ⌘K
@@ -158,7 +214,7 @@ export default function HomePage() {
           </div>
 
           <button
-            onClick={() => fetchMeetings(searchQuery)}
+            onClick={() => fetchMeetings(searchQuery, 1)}
             className="flex items-center gap-2 px-3 py-2 bg-gray-900 hover:bg-gray-800 text-gray-400 hover:text-gray-200 border border-gray-800 rounded-xl text-sm transition-all"
             title="Refresh"
           >
@@ -174,7 +230,7 @@ export default function HomePage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <StatCard
             label="Total recordings"
-            value={counts.all}
+            value={total}
             icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>}
           />
           <StatCard
@@ -186,7 +242,7 @@ export default function HomePage() {
             label="Action items"
             value={totalActions}
             icon={<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>}
-            sub="across all meetings"
+            sub="across loaded meetings"
           />
           <StatCard
             label="This week"
@@ -237,7 +293,7 @@ export default function HomePage() {
       {loading ? (
         <LoadingSkeleton />
       ) : meetings.length === 0 ? (
-        <EmptyState hasSearch={rawQuery.length > 0} />
+        <EmptyState hasSearch={rawQuery.length > 0} hasTag={!!tagFilter} />
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <p className="text-gray-400 mb-2">No {filter} meetings</p>
@@ -246,18 +302,43 @@ export default function HomePage() {
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filtered.map((meeting) => (
-            <MeetingCard key={meeting.meetingId} meeting={meeting} />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filtered.map((meeting) => (
+              <MeetingCard key={meeting.meetingId} meeting={meeting} />
+            ))}
+          </div>
+
+          {/* Load more */}
+          {hasMore && filter === 'all' && (
+            <div className="flex justify-center mt-8">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="px-6 py-2.5 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-gray-200 rounded-xl text-sm font-medium transition-all disabled:opacity-50"
+              >
+                {loadingMore ? 'Loading...' : `Load more (${total - meetings.length} remaining)`}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
 
-function EmptyState({ hasSearch }: { hasSearch: boolean }) {
-  if (hasSearch) {
+export default function HomePage() {
+  return (
+    <Suspense fallback={<LoadingSkeleton />}>
+      <HomePageInner />
+    </Suspense>
+  );
+}
+
+function EmptyState({ hasSearch, hasTag }: { hasSearch: boolean; hasTag: boolean }) {
+  const router = useRouter();
+
+  if (hasSearch || hasTag) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
         <div className="w-14 h-14 bg-gray-900 border border-gray-800 rounded-2xl flex items-center justify-center mb-4">
@@ -266,7 +347,10 @@ function EmptyState({ hasSearch }: { hasSearch: boolean }) {
           </svg>
         </div>
         <h3 className="text-gray-300 font-semibold mb-2">No results found</h3>
-        <p className="text-gray-500 text-sm">Try a different search term</p>
+        <p className="text-gray-500 text-sm mb-4">Try a different search term or tag</p>
+        <button onClick={() => router.push('/')} className="text-blue-400 text-sm hover:text-blue-300">
+          Clear filters
+        </button>
       </div>
     );
   }

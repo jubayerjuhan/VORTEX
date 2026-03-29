@@ -9,20 +9,39 @@ export async function GET(request: NextRequest) {
     await connectToDatabase();
 
     const q = request.nextUrl.searchParams.get('q');
+    const tag = request.nextUrl.searchParams.get('tag');
+    const page = Math.max(1, parseInt(request.nextUrl.searchParams.get('page') ?? '1', 10));
+    const limit = Math.min(50, Math.max(1, parseInt(request.nextUrl.searchParams.get('limit') ?? '12', 10)));
+    const skip = (page - 1) * limit;
+
     const filter: Record<string, unknown> = {};
+
     if (q && q.trim()) {
       const escaped = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      filter.title = { $regex: escaped, $options: 'i' };
+      filter.$or = [
+        { title: { $regex: escaped, $options: 'i' } },
+        { transcript: { $regex: escaped, $options: 'i' } },
+        { 'summary.tldr': { $regex: escaped, $options: 'i' } },
+      ];
     }
 
-    const meetings = await Meeting.find(filter)
-      .select('meetingId title date duration status summary.tldr summary.actionItems participants createdAt')
-      .sort({ date: -1 })
-      .lean();
+    if (tag && tag.trim()) {
+      filter.tags = tag.trim();
+    }
 
-    console.log('[API] Returning', meetings.length, 'meetings');
+    const [meetings, total] = await Promise.all([
+      Meeting.find(filter)
+        .select('meetingId title date duration status summary.tldr summary.actionItems participants tags createdAt')
+        .sort({ date: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Meeting.countDocuments(filter),
+    ]);
 
-    return NextResponse.json({ meetings });
+    console.log('[API] Returning', meetings.length, 'of', total, 'meetings');
+
+    return NextResponse.json({ meetings, total, page, limit, pages: Math.ceil(total / limit) });
   } catch (error) {
     console.error('[API] Error fetching meetings:', error);
     return NextResponse.json(

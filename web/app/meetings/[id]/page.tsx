@@ -21,6 +21,9 @@ interface Meeting {
     nextSteps: string[];
   };
   error?: string;
+  tags: string[];
+  notes: string;
+  speakerNames: Record<string, string>;
 }
 
 function formatDuration(s: number): string {
@@ -46,6 +49,14 @@ const tabs: { id: TabId; label: string; icon: string }[] = [
   { id: 'nextSteps', label: 'Next Steps', icon: 'M13 7l5 5m0 0l-5 5m5-5H6' },
 ];
 
+// Apply speaker name mapping to a transcript line
+function applyNames(text: string, speakerNames: Record<string, string>): string {
+  return text.replace(/^(Speaker \d+):/gm, (_, label) => {
+    const name = speakerNames[label];
+    return name ? `${name}:` : `${label}:`;
+  });
+}
+
 export default function MeetingDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -58,9 +69,24 @@ export default function MeetingDetailPage() {
   const [activeTab, setActiveTab] = useState<TabId>('tldr');
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Title
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const titleInputRef = useRef<HTMLInputElement>(null);
+
+  // Tags
+  const [tagInput, setTagInput] = useState('');
+  const tagInputRef = useRef<HTMLInputElement>(null);
+
+  // Notes
+  const [notesDraft, setNotesDraft] = useState('');
+  const [savingNotes, setSavingNotes] = useState(false);
+  const notesTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Speaker names
+  const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
+  const [speakerDraft, setSpeakerDraft] = useState('');
 
   const fetchMeeting = async () => {
     try {
@@ -68,6 +94,7 @@ export default function MeetingDetailPage() {
       if (!res.ok) { setError(res.status === 404 ? 'Meeting not found' : 'Failed to load meeting'); return; }
       const data = await res.json();
       setMeeting(data.meeting);
+      setNotesDraft(data.meeting.notes ?? '');
       setError(null);
     } catch { setError('Failed to load meeting'); }
     finally { setLoading(false); }
@@ -81,11 +108,11 @@ export default function MeetingDetailPage() {
     return () => clearInterval(t);
   }, [meeting?.status]);
 
-  // Keyboard shortcuts: E = export, Cmd+Backspace = delete
+  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === 'e' && meeting?.status === 'completed') handleExport();
+      if (e.key === 'e' && meeting?.status === 'completed') handleExportMarkdown();
       if (e.key === 'Backspace' && (e.metaKey || e.ctrlKey)) handleDelete();
     };
     document.addEventListener('keydown', handler);
@@ -96,6 +123,8 @@ export default function MeetingDetailPage() {
   useEffect(() => {
     if (isEditingTitle) titleInputRef.current?.focus();
   }, [isEditingTitle]);
+
+  // ── Title ──────────────────────────────────────────────────────────────────
 
   const handleTitleEdit = () => {
     if (!meeting) return;
@@ -122,6 +151,87 @@ export default function MeetingDetailPage() {
     setIsEditingTitle(false);
   };
 
+  // ── Tags ───────────────────────────────────────────────────────────────────
+
+  const handleAddTag = async (tag: string) => {
+    if (!meeting || !tag.trim()) return;
+    const trimmed = tag.trim().toLowerCase();
+    if (meeting.tags?.includes(trimmed)) { setTagInput(''); return; }
+    const newTags = [...(meeting.tags ?? []), trimmed];
+    await saveTags(newTags);
+    setTagInput('');
+  };
+
+  const handleRemoveTag = async (tag: string) => {
+    if (!meeting) return;
+    await saveTags(meeting.tags.filter((t) => t !== tag));
+  };
+
+  const saveTags = async (tags: string[]) => {
+    try {
+      const res = await fetch(`/api/meetings/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tags }),
+      });
+      if (res.ok) {
+        setMeeting((prev) => prev ? { ...prev, tags } : prev);
+      } else {
+        toast('Failed to update tags', 'error');
+      }
+    } catch { toast('Failed to update tags', 'error'); }
+  };
+
+  // ── Notes ──────────────────────────────────────────────────────────────────
+
+  const handleNotesChange = (value: string) => {
+    setNotesDraft(value);
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    notesTimerRef.current = setTimeout(() => saveNotes(value), 1000);
+  };
+
+  const saveNotes = async (notes: string) => {
+    setSavingNotes(true);
+    try {
+      await fetch(`/api/meetings/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+      setMeeting((prev) => prev ? { ...prev, notes } : prev);
+    } catch { toast('Failed to save notes', 'error'); }
+    finally { setSavingNotes(false); }
+  };
+
+  // ── Speaker names ──────────────────────────────────────────────────────────
+
+  const handleSpeakerSave = async (originalLabel: string) => {
+    if (!meeting) return;
+    const name = speakerDraft.trim();
+    const updated = { ...(meeting.speakerNames ?? {}) };
+    if (name) {
+      updated[originalLabel] = name;
+    } else {
+      delete updated[originalLabel];
+    }
+    try {
+      const res = await fetch(`/api/meetings/${id}/speakers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speakerNames: updated }),
+      });
+      if (res.ok) {
+        setMeeting((prev) => prev ? { ...prev, speakerNames: updated } : prev);
+        toast('Speaker name saved', 'success');
+      } else {
+        toast('Failed to save speaker name', 'error');
+      }
+    } catch { toast('Failed to save speaker name', 'error'); }
+    setEditingSpeaker(null);
+  };
+
+  // ── Exports ────────────────────────────────────────────────────────────────
+
   const handleCopy = async (text: string, label = 'Copied to clipboard') => {
     try {
       await navigator.clipboard.writeText(text);
@@ -129,14 +239,17 @@ export default function MeetingDetailPage() {
     } catch { toast('Copy failed', 'error'); }
   };
 
-  const handleExport = () => {
+  const handleExportMarkdown = () => {
     if (!meeting) return;
+    const notesSection = meeting.notes ? `\n## Notes\n\n${meeting.notes}\n` : '';
+    const tagsSection = meeting.tags?.length ? `\n**Tags:** ${meeting.tags.join(', ')}\n` : '';
     const md = [
       `# ${meeting.title}`,
       ``,
       `**Date:** ${formatDate(meeting.date)}`,
       `**Duration:** ${formatDuration(meeting.duration)}`,
       meeting.participants?.length ? `**Participants:** ${meeting.participants.join(', ')}` : '',
+      tagsSection,
       ``,
       `## Summary`,
       ``,
@@ -153,21 +266,34 @@ export default function MeetingDetailPage() {
       `## Next Steps`,
       ``,
       ...(meeting.summary?.nextSteps?.map((i, n) => `${n + 1}. ${i}`) ?? ['None']),
-      ``,
+      notesSection,
       `## Full Transcript`,
       ``,
-      meeting.transcript || 'No transcript available.',
+      meeting.transcript
+        ? applyNames(meeting.transcript, meeting.speakerNames ?? {})
+        : 'No transcript available.',
     ].join('\n');
 
-    const blob = new Blob([md], { type: 'text/markdown' });
+    downloadBlob(md, `${meeting.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.md`, 'text/markdown');
+    toast('Exported as Markdown', 'success');
+  };
+
+  const handleExportJSON = () => {
+    if (!meeting) return;
+    const json = JSON.stringify(meeting, null, 2);
+    downloadBlob(json, `${meeting.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.json`, 'application/json');
+    toast('Exported as JSON', 'success');
+  };
+
+  function downloadBlob(content: string, filename: string, type: string) {
+    const blob = new Blob([content], { type });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${meeting.title.replace(/[^a-z0-9]/gi, '-').toLowerCase()}.md`;
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(url);
-    toast('Exported as Markdown', 'success');
-  };
+  }
 
   const handleDelete = async () => {
     if (!confirm('Delete this meeting? This cannot be undone.')) return;
@@ -196,6 +322,11 @@ export default function MeetingDetailPage() {
     if (activeTab === 'nextSteps') return (meeting.summary.nextSteps || []).map((i, n) => `${n + 1}. ${i}`).join('\n');
     return '';
   };
+
+  // Build unique speaker labels from transcript
+  const speakerLabels = meeting?.transcript
+    ? [...new Set([...meeting.transcript.matchAll(/^(Speaker \d+):/gm)].map((m) => m[1]))]
+    : [];
 
   if (loading) {
     return (
@@ -271,6 +402,38 @@ export default function MeetingDetailPage() {
           )}
         </div>
 
+        {/* Tags */}
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          {(meeting.tags ?? []).map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-600/10 border border-blue-600/20 text-blue-400 text-xs rounded-full"
+            >
+              {tag}
+              <button
+                onClick={() => handleRemoveTag(tag)}
+                className="text-blue-500/50 hover:text-blue-300 transition-colors ml-0.5"
+                title="Remove tag"
+              >
+                ✕
+              </button>
+            </span>
+          ))}
+          <div className="flex items-center gap-1">
+            <input
+              ref={tagInputRef}
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); handleAddTag(tagInput); }
+              }}
+              onBlur={() => { if (tagInput.trim()) handleAddTag(tagInput); }}
+              placeholder="Add tag..."
+              className="w-24 bg-transparent border-b border-gray-700 focus:border-blue-500 text-xs text-gray-400 placeholder-gray-600 focus:outline-none py-0.5 transition-colors"
+            />
+          </div>
+        </div>
+
         {/* Meta */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-gray-500 mb-5">
           <span className="flex items-center gap-1.5">
@@ -307,27 +470,35 @@ export default function MeetingDetailPage() {
           </span>
 
           {meeting.status === 'completed' && (
-            <button
-              onClick={handleExport}
-              className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-gray-200 rounded-full text-xs font-medium transition-all"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              Export Markdown
-            </button>
-          )}
-
-          {meeting.status === 'completed' && (
-            <button
-              onClick={() => handleCopy(`${meeting.title}\n\n${meeting.summary?.tldr}\n\nAction Items:\n${meeting.summary?.actionItems?.map(i => `• ${i}`).join('\n')}`, 'Meeting notes copied')}
-              className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-gray-200 rounded-full text-xs font-medium transition-all"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-              Copy Notes
-            </button>
+            <>
+              <button
+                onClick={handleExportMarkdown}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-gray-200 rounded-full text-xs font-medium transition-all"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Export MD
+              </button>
+              <button
+                onClick={handleExportJSON}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-gray-200 rounded-full text-xs font-medium transition-all"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+                Export JSON
+              </button>
+              <button
+                onClick={() => handleCopy(`${meeting.title}\n\n${meeting.summary?.tldr}\n\nAction Items:\n${meeting.summary?.actionItems?.map(i => `• ${i}`).join('\n')}`, 'Meeting notes copied')}
+                className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-900 hover:bg-gray-800 border border-gray-800 text-gray-400 hover:text-gray-200 rounded-full text-xs font-medium transition-all"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                </svg>
+                Copy Notes
+              </button>
+            </>
           )}
 
           {meeting.status === 'failed' && (
@@ -367,7 +538,6 @@ export default function MeetingDetailPage() {
               <p className="text-amber-400/50 text-xs mt-0.5">Page updates automatically every 5 seconds.</p>
             </div>
           </div>
-          {/* Step progress */}
           <div className="flex items-center gap-2">
             {(['uploading', 'transcribing', 'summarizing'] as const).map((step, i) => {
               const stepLabels = { uploading: 'Uploading', transcribing: 'Transcribing', summarizing: 'Summarizing' };
@@ -404,7 +574,6 @@ export default function MeetingDetailPage() {
       {/* Summary tabs */}
       {meeting.status === 'completed' && (
         <div className="mb-6">
-          {/* Tab bar */}
           <div className="flex items-center gap-1 bg-gray-900/60 border border-gray-800/60 rounded-2xl p-1 mb-4">
             {tabs.map((tab) => (
               <button
@@ -429,7 +598,6 @@ export default function MeetingDetailPage() {
             ))}
           </div>
 
-          {/* Tab content */}
           <div className="bg-gray-900 border border-gray-800/60 rounded-2xl overflow-hidden">
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800/60">
               <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -452,7 +620,6 @@ export default function MeetingDetailPage() {
                   {meeting.summary?.tldr || <span className="text-gray-500">No summary available.</span>}
                 </p>
               )}
-
               {activeTab === 'actionItems' && (
                 <ul className="space-y-2.5">
                   {meeting.summary?.actionItems?.length > 0 ? (
@@ -465,7 +632,6 @@ export default function MeetingDetailPage() {
                   ) : <p className="text-gray-500 text-sm">No action items identified.</p>}
                 </ul>
               )}
-
               {activeTab === 'keyDecisions' && (
                 <ul className="space-y-3">
                   {meeting.summary?.keyDecisions?.length > 0 ? (
@@ -478,7 +644,6 @@ export default function MeetingDetailPage() {
                   ) : <p className="text-gray-500 text-sm">No key decisions identified.</p>}
                 </ul>
               )}
-
               {activeTab === 'nextSteps' && (
                 <ol className="space-y-3">
                   {meeting.summary?.nextSteps?.length > 0 ? (
@@ -492,6 +657,75 @@ export default function MeetingDetailPage() {
                 </ol>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Notes */}
+      <div className="bg-gray-900 border border-gray-800/60 rounded-2xl overflow-hidden mb-6">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-800/60">
+          <span className="flex items-center gap-2 text-sm font-medium text-gray-300">
+            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            </svg>
+            Notes
+          </span>
+          {savingNotes && <span className="text-xs text-gray-600">Saving...</span>}
+        </div>
+        <div className="p-5">
+          <textarea
+            value={notesDraft}
+            onChange={(e) => handleNotesChange(e.target.value)}
+            onBlur={() => { if (notesTimerRef.current) { clearTimeout(notesTimerRef.current); } saveNotes(notesDraft); }}
+            placeholder="Add your personal notes for this meeting..."
+            rows={4}
+            className="w-full bg-transparent text-gray-300 text-sm placeholder-gray-600 focus:outline-none resize-none leading-relaxed"
+          />
+        </div>
+      </div>
+
+      {/* Speaker name mapping */}
+      {speakerLabels.length > 0 && (
+        <div className="bg-gray-900 border border-gray-800/60 rounded-2xl overflow-hidden mb-6">
+          <div className="flex items-center gap-2 px-5 py-3 border-b border-gray-800/60">
+            <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+            <span className="text-sm font-medium text-gray-300">Speaker Names</span>
+            <span className="text-xs text-gray-600 ml-1">Click to rename</span>
+          </div>
+          <div className="p-5 flex flex-wrap gap-3">
+            {speakerLabels.map((label) => {
+              const mapped = meeting.speakerNames?.[label];
+              const isEditing = editingSpeaker === label;
+              return (
+                <div key={label} className="flex items-center gap-2 bg-gray-800/60 border border-gray-700/60 rounded-xl px-3 py-2">
+                  <span className="text-xs text-gray-500">{label}</span>
+                  <span className="text-gray-600 text-xs">→</span>
+                  {isEditing ? (
+                    <input
+                      autoFocus
+                      value={speakerDraft}
+                      onChange={(e) => setSpeakerDraft(e.target.value)}
+                      onBlur={() => handleSpeakerSave(label)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSpeakerSave(label);
+                        if (e.key === 'Escape') setEditingSpeaker(null);
+                      }}
+                      placeholder="Enter name..."
+                      className="w-28 bg-transparent border-b border-blue-500 text-xs text-white focus:outline-none py-0.5"
+                    />
+                  ) : (
+                    <button
+                      onClick={() => { setEditingSpeaker(label); setSpeakerDraft(mapped ?? ''); }}
+                      className={`text-xs transition-colors ${mapped ? 'text-blue-400 hover:text-blue-300' : 'text-gray-600 hover:text-gray-400'}`}
+                    >
+                      {mapped ?? 'unnamed'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -515,7 +749,7 @@ export default function MeetingDetailPage() {
             <div className="flex items-center gap-3">
               {transcriptOpen && (
                 <button
-                  onClick={(e) => { e.stopPropagation(); handleCopy(meeting.transcript, 'Transcript copied'); }}
+                  onClick={(e) => { e.stopPropagation(); handleCopy(applyNames(meeting.transcript, meeting.speakerNames ?? {}), 'Transcript copied'); }}
                   className="text-xs text-gray-600 hover:text-gray-400 flex items-center gap-1 transition-colors"
                 >
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -532,7 +766,7 @@ export default function MeetingDetailPage() {
           {transcriptOpen && (
             <div className="border-t border-gray-800/60 px-5 pb-5 pt-4">
               <pre className="text-gray-400 text-xs leading-relaxed whitespace-pre-wrap font-mono max-h-96 overflow-y-auto scrollbar-thin">
-                {meeting.transcript}
+                {applyNames(meeting.transcript, meeting.speakerNames ?? {})}
               </pre>
             </div>
           )}

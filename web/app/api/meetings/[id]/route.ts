@@ -40,17 +40,27 @@ export async function PUT(
 
   try {
     const body = await request.json();
-    const { title } = body;
+    const { title, tags, notes, speakerNames } = body;
 
-    if (!title || typeof title !== 'string' || !title.trim()) {
-      return NextResponse.json({ error: 'Title is required' }, { status: 400 });
+    if (title !== undefined && (typeof title !== 'string' || !title.trim())) {
+      return NextResponse.json({ error: 'Title must be a non-empty string' }, { status: 400 });
+    }
+
+    const update: Record<string, unknown> = {};
+    if (title !== undefined) update.title = title.trim();
+    if (tags !== undefined) update.tags = Array.isArray(tags) ? tags.map(String) : [];
+    if (notes !== undefined) update.notes = typeof notes === 'string' ? notes : '';
+    if (speakerNames !== undefined && typeof speakerNames === 'object') update.speakerNames = speakerNames;
+
+    if (Object.keys(update).length === 0) {
+      return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
     }
 
     await connectToDatabase();
 
     const meeting = await Meeting.findOneAndUpdate(
       { meetingId: id },
-      { title: title.trim() },
+      update,
       { new: true }
     ).lean();
 
